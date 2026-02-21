@@ -21,23 +21,47 @@ if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
     exit 1
 fi
 
+# MCP timeout for stdio server (default 5 sec is too short)
+export MCP_TIMEOUT=30000
+export MAX_MCP_OUTPUT_TOKENS=50000
+
 # Date and chat_id
 TODAY=$(date +%Y-%m-%d)
 CHAT_ID="${ALLOWED_USER_IDS//[\[\]]/}"  # remove brackets from [123456]
 
-cd "$PROJECT_DIR"  # MCP configured for project root
-
 echo "=== d-brain processing for $TODAY ==="
 
-# Run Claude with --dangerously-skip-permissions and MCP
+# Run Claude from vault/ for context (reads vault/.claude/CLAUDE.md)
+cd "$VAULT_DIR"
 REPORT=$(claude --print --dangerously-skip-permissions \
     --mcp-config "$PROJECT_DIR/mcp-config.json" \
-    -p "Today is $TODAY. Execute daily processing according to dbrain-processor skill." \
+    -p "Today is $TODAY. Execute daily processing according to dbrain-processor skill.
+
+CRITICAL: MCP loads in 10-30 seconds. You are NOT in subprocess — MCP IS running, just initializing.
+
+Algorithm:
+1. Call mcp__todoist__find-tasks-by-date
+2. Error? Wait 10 sec, read goals/, daily/ files
+3. Call again
+4. Error again? Wait 20 more sec
+5. Third call — GUARANTEED to work
+
+DO NOT say MCP unavailable. It is available. Just wait and call." \
     2>&1) || true
+cd "$PROJECT_DIR"
 
 echo "=== Claude output ==="
 echo "$REPORT"
 echo "===================="
+
+# Remove HTML comments (break Telegram HTML parser)
+REPORT_CLEAN=$(echo "$REPORT" | sed '/<!--/,/-->/d')
+
+# Rebuild vault graph (keeps structure up to date)
+echo "=== Rebuilding vault graph ==="
+cd "$VAULT_DIR"
+uv run .claude/skills/graph-builder/scripts/analyze.py || echo "Graph rebuild failed (non-critical)"
+cd "$PROJECT_DIR"
 
 # Git commit
 git add -A
@@ -45,16 +69,20 @@ git commit -m "chore: process daily $TODAY" || true
 git push || true
 
 # Send to Telegram
-if [ -n "$REPORT" ] && [ -n "$CHAT_ID" ]; then
+if [ -n "$REPORT_CLEAN" ] && [ -n "$CHAT_ID" ]; then
     echo "=== Sending to Telegram ==="
-    curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+    RESULT=$(curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
         -d "chat_id=$CHAT_ID" \
-        -d "text=$REPORT" \
-        -d "parse_mode=HTML" || \
-    # Fallback: send without HTML parsing
-    curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
-        -d "chat_id=$CHAT_ID" \
-        -d "text=$REPORT"
+        -d "text=$REPORT_CLEAN" \
+        -d "parse_mode=HTML")
+
+    # If HTML failed, send without formatting
+    if echo "$RESULT" | grep -q '"ok":false'; then
+        echo "HTML failed: $RESULT"
+        curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+            -d "chat_id=$CHAT_ID" \
+            -d "text=$REPORT_CLEAN"
+    fi
 fi
 
 echo "=== Done ==="

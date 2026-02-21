@@ -207,7 +207,15 @@ Analyze and maintain vault link structure. Use `/graph` command or invoke `graph
 
 See `skills/graph-builder/` for full documentation.
 
+## Learnings (from experience)
+
+1. **Don't rewrite working code** without reason (KISS, DRY, YAGNI)
+2. **Don't add checks** that weren't there — let the agent decide
+3. **Don't propose solutions** without studying git log/diff first
+4. **Don't break architecture** (process.sh → Claude → skill is correct)
+5. **Problems are usually simple** (e.g., sed one-liner for HTML fix)
+
 ---
 
-*System Version: 2.2*
-*Updated: 2026-01-30*
+*System Version: 2.3*
+*Updated: 2026-02-01*
